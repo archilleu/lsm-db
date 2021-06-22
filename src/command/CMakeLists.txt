@@ -12,5 +12,5 @@ include_directories(../../thirdpart)
 #generate static library
 #add_library(libname ${<dir>})
 set(LIBCOMMAND command)
-#add_library(${LIBCOMMAND} ${DIR_SRCS_COMMAND})
+add_library(${LIBCOMMAND} ${DIR_SRCS_COMMAND})
 #---------------------------------------------------------------------------

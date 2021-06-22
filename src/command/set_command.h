@@ -2,25 +2,26 @@
 #ifndef LSM_SET_COMMAND_H_
 #define LSM_SET_COMMAND_H_
 //---------------------------------------------------------------------------
-#include "abstract_command.h"
+#include "../../thirdpart/base/include/json/json.h"
+
+#include "command.h"
 //---------------------------------------------------------------------------
 namespace lsm
 {
 
-class SetCommand : public AbstractCommand
+//---------------------------------------------------------------------------
+using namespace base::json;
+//---------------------------------------------------------------------------
+class SetCommand : public Command
 {
 public:
-    SetCommand(const std::string& key, const std::string& value)
-    :   AbstractCommand(CommandType::SET)
-    {
-        key_ = key;
-        value_ = value;
-    }
+    SetCommand(const std::string& key, const std::string& value);
+
+    std::string ToString() const;
 
 public:
     std::string get_key() { return key_; }
     std::string get_value() { return value_; }
-
 
 private:
     std::string key_;

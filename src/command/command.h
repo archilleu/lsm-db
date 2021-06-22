@@ -3,6 +3,8 @@
 #define LSM_COMMAND_H_
 //---------------------------------------------------------------------------
 #include <string>
+
+#include "command_type.h"
 //---------------------------------------------------------------------------
 namespace lsm
 {
@@ -10,8 +12,22 @@ namespace lsm
 class Command
 {
 public:
-    virtual std::string get_key() =0;
+    Command()
+    {}
 
+    Command(CommandType type)
+    {
+        type_ = type;
+    }
+    virtual ~Command(){}
+
+public:
+    CommandType get_type() { return type_; }
+
+    virtual std::string ToString() const { return ""; }
+
+private:
+    CommandType type_;
 };
 
 

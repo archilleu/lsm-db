@@ -1,10 +1,6 @@
 //---------------------------------------------------------------------------
-#ifndef LSM_RM_COMMAND_H_
-#define LSM_RM_COMMAND_H_
-//---------------------------------------------------------------------------
-#include "../../thirdpart/base/include/json/json.h"
 
-#include "command.h"
+#include "rm_command.h"
 //---------------------------------------------------------------------------
 namespace lsm
 {
@@ -12,21 +8,20 @@ namespace lsm
 //---------------------------------------------------------------------------
 using namespace base::json;
 //---------------------------------------------------------------------------
-class RmCommand : public Command
+RmCommand::RmCommand(const std::string& key)
+:   Command(CommandType::RM)
 {
-public:
-    RmCommand(const std::string& key);
-
-    std::string ToString() const;
-
-public:
-    std::string get_key() { return key_; }
-
-private:
-    std::string key_;
-};
-
+    key_ = key;
+}
+//---------------------------------------------------------------------------
+std::string RmCommand::ToString() const
+{
+    Value value(Value::Object);
+    value["key"] = key_;
+    value["type"] = 1;
+    return JsonWriter(value).ToString();
+}
+//---------------------------------------------------------------------------
 
 }//namespace lsm
 //---------------------------------------------------------------------------
-#endif //LSM_RM_COMMAND_H_
