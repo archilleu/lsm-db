@@ -1,37 +1,31 @@
 //---------------------------------------------------------------------------
-#ifndef LSM_COMMAND_H_
-#define LSM_COMMAND_H_
+#ifndef LSM_POSITION_H_
+#define LSM_POSITION_H_
 //---------------------------------------------------------------------------
-#include <string>
-
-#include "command_type.h"
+#include <cstddef>
 //---------------------------------------------------------------------------
 namespace lsm
 {
 
-class Command
+class Position
 {
 public:
-    Command()
-    {}
-
-    Command(CommandType type)
+    Position(size_t index, size_t length)
     {
-        type_ = type;
+        index_ = index;
+        length_ = length;
     }
-    virtual ~Command(){}
-
 
 public:
-    CommandType get_type() const { return type_; }
-
-    virtual std::string ToString() const { return ""; }
+    size_t get_index() const { return index_; }
+    size_t get_length() const { return length_; }
 
 private:
-    CommandType type_;
+    size_t index_;
+    size_t length_;
 };
 
 
 }//namespace lsm
 //---------------------------------------------------------------------------
-#endif //LSM_COMMAND_H_
+#endif //LSM_POSITION_H_

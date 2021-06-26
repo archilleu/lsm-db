@@ -8,16 +8,17 @@
  * |--------data-----------|-----------index--------------|----metainfo------|
  */
 //---------------------------------------------------------------------------
-#include <stdio.h>
-//---------------------------------------------------------------------------
 namespace lsm
 {
 
 class SsTableMetainfo
 {
 public:
-    bool Dump(FILE* file);
-    static bool UnDump(SsTableMetainfo* metainfo, FILE* file);
+    SsTableMetainfo();
+
+public:
+    bool WriteToFile(int fd);
+    static bool ReadFromFile(SsTableMetainfo* metainfo, int fd);
 
 public:
     long get_version() const { return version_; }
@@ -35,11 +36,11 @@ public:
     void set_part_size(long part_size) { part_size_ = part_size; }
 
 public:
-    static long METAINFO_SIZE;
+    static int METAINFO_SIZE;
 
 private:
-    bool WriteField(long field, FILE* file);
-    static bool ReadField(long* field, FILE* file);
+    bool WriteField(long field, int fd);
+    static bool ReadField(long* field, int fd);
 
 private:
     long version_;

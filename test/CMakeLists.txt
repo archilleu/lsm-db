@@ -26,6 +26,9 @@ add_executable(${TEST_ss_table_metainfo} test_ss_table_metainfo.cc)
 
 set(TEST_kv_store test_kv_store)
 add_executable(${TEST_kv_store} test_kv_store.cc)
+
+set(TEST_ss_table test_ss_table)
+add_executable(${TEST_ss_table} test_ss_table.cc)
 #---------------------------------------------------------------------------
 #add link lib
 set(LIBNAME lsmdb)
@@ -37,6 +40,8 @@ target_link_libraries(${TEST_lsm_db} ${LIBNAME} ${LIBTOOLS} ${LIBBASE} pthread)
 target_link_libraries(${TEST_ss_table_metainfo} ${LIBNAME} ${LIBTOOLS} ${LIBBASE} pthread)
 
 target_link_libraries(${TEST_kv_store} ${LIBNAME} ${LIBTOOLS} ${LIBCOMMAND} ${LIBBASE} pthread)
+
+target_link_libraries(${TEST_ss_table} ${LIBNAME} ${LIBTOOLS} ${LIBCOMMAND} ${LIBBASE} pthread)
 #---------------------------------------------------------------------------
 #add test
 add_test(${TEST_lsm_db} ${EXECUTABLE_OUTPUT_PATH}/${TEST_lsm_db})
@@ -46,4 +51,5 @@ add_test(${TEST_ss_table_metainfo}
 
 add_test(${TEST_kv_store} ${EXECUTABLE_OUTPUT_PATH}/${TEST_kv_store})
 
+add_test(${TEST_ss_table} ${EXECUTABLE_OUTPUT_PATH}/${TEST_ss_table})
 #---------------------------------------------------------------------------

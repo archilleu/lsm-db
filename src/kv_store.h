@@ -39,6 +39,12 @@ private:
     // 保存修改命令到WAL文件
     bool WriteToWalFile(const std::shared_ptr<Command>& command);
 
+    // 切换内存表
+    bool SwitchIndex();
+
+    // 持久化到sstable
+    bool StoreToSsTable();
+
 public:
     static const char* EXT;     // 扩展名
     static const char* WAL;     // 日志文件

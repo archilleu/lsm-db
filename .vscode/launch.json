@@ -5,7 +5,7 @@
             "name": "C/C++",
             "type": "cppdbg",
             "request": "launch",
-            "program": "/home/archilleu/workspace/muinx/build/muinx/muinx",
+            "program": "/home/archilleu/workspace/lsm-db/build/bin/test_ss_table",
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",

@@ -30,7 +30,7 @@ public:
     void set_logger(std::shared_ptr<base::Logger> logger) { logger_ = logger; }
     std::shared_ptr<base::Logger> get_logger() { return logger_; }
 
-    const char* OsError(int e) const;
+    static const char* OsError(int e);
 
 private:
     std::shared_ptr<base::Logger> logger_;

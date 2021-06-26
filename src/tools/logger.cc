@@ -17,7 +17,7 @@ Logger::Logger()
     logger_ = base::Logger::stdout_logger_mt();
 }
 //---------------------------------------------------------------------------
-const char* Logger::OsError(int e) const
+const char* Logger::OsError(int e)
 {
     return strerror_r(e, t_error_buf, sizeof(t_error_buf));
 }
