@@ -24,13 +24,21 @@ public:
     ~SsTable();
 
 public:
+    using IndexMap = std::map<std::string, std::shared_ptr<Command>>;
+
     bool init(const std::string& path);
-    bool init(const std::string& path, size_t part_size, std::map<std::string, std::shared_ptr<Command>> index);
+    bool init(const std::string& path, size_t part_size, const IndexMap& index);
 
 public:
-    std::shared_ptr<Command> Query(const std::string& key);
+    std::shared_ptr<Command> Query(const std::string& key) const;
 
 private:
+    bool ReadMetainfo();
+
+    bool SaveCommand(const IndexMap& index);
+
+    bool SaveSpareIndex();
+
     bool WriteDataPart(const Value& part_data);
 
 private:

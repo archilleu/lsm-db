@@ -22,7 +22,7 @@ namespace lsm
 class KvStore
 {
 public:
-    KvStore(std::string data_dir, size_t store_threshold, size_t part_size);
+    KvStore(const std::string& data_dir, size_t store_threshold, size_t part_size);
     ~KvStore();
 
 public:
@@ -52,14 +52,18 @@ public:
     static const char* WAL_TMP; // 临时日志文件
 
 private:
+    std::list<std::string> GetSsTableFileList();
+
+private:
+    using IndexMap = std::map<std::string, std::shared_ptr<Command>>;
     // 内存表，使用有序的map，方便转储合并
-    std::map<std::string, std::shared_ptr<Command>> index_;
+    IndexMap index_;
     
     /**
      * 不可变内存表，用于持久化index_的时候暂存数据
      * 转储的时候写操作都在这个内存表里面
      */
-    std::map<std::string, std::shared_ptr<Command>> immutable_index_;
+    IndexMap immutable_index_;
 
     // ss-table列表
     std::list<SsTable> ss_tables_;

@@ -1,5 +1,10 @@
 //---------------------------------------------------------------------------
 #include <ctime>
+#include <cstring>
+#include <cstdlib>
+
+#include <sys/types.h>
+#include <dirent.h>
 
 #include "../thirdpart/base/include/function.h"
 
@@ -14,20 +19,67 @@ namespace lsm
 //---------------------------------------------------------------------------
 const char* KvStore::EXT = ".table";
 const char* KvStore::WAL = "wal";
-const char* KvStore::RW_MODE = "wb";
-const char* KvStore::WAL_TMP = "wal-tmp";
+const char* KvStore::RW_MODE = "a+";
+const char* KvStore::WAL_TMP = "wal_tmp";
 //---------------------------------------------------------------------------
-KvStore::KvStore(std::string data_dir, size_t store_threshold, size_t part_size)
+KvStore::KvStore(const std::string& data_dir, size_t store_threshold, size_t part_size)
 {
     data_dir_ = data_dir;
     store_threshold_ = store_threshold;
     part_size_ = part_size;
 
-    // TODO: 加载ss table 目录
-    //
-    
+    // 生成ss table目录
+    if(!base::FolderExist(data_dir_))
+    {
+        if(false == base::FolderCreate(data_dir, true))
+        {
+            Logger_error("create data folder failed!");
+            abort();
+        }
+    }
+
+    // 加载ss table
+    std::list<std::string> files = GetSsTableFileList();
+    for(std::string file : files)
+    {
+        // TODO: wap tmp异常文件处理
+        if(file == WAL_TMP)
+        {
+            Logger_debug("wal:%s", file.c_str());
+            continue;
+        }
+
+        // ss table 文件
+        size_t pos = file.find(EXT);
+        if(std::string::npos != pos)
+        {
+            SsTable ss_table;
+            if(false == ss_table.init(data_dir_  + "/" + file))
+            {
+                Logger_error("init ss table file failed:%s!", file.c_str());
+                continue;
+            }
+            ss_tables_.push_back(ss_table);
+            continue;
+        }
+
+        // wap 文件
+        if(file == WAL)
+        {
+            Logger_debug("WAL:%s", file.c_str());
+            continue;
+        }
+    }
+
+    // 加载
     std::string path = data_dir + "/" + WAL;
     wal_file_ = ::fopen(path.c_str(), RW_MODE);
+    if(0 == wal_file_)
+    {
+        Logger_error("create wal file failed!");
+        abort();
+    }
+
     return;
 }
 //---------------------------------------------------------------------------
@@ -52,8 +104,17 @@ void KvStore::Set(const std::string& key, const std::string& value)
     // 3.如果超过阈值进行持久化
     if(index_.size() > store_threshold_)
     {
-        // TODO: 持久化
-        
+        // 交换内存表
+        if(false == SwitchIndex())
+        {
+            return;
+        }
+
+        // 持久化
+        if(false == StoreToSsTable())
+        {
+            return;
+        }
     }
 
     return;
@@ -116,6 +177,10 @@ void KvStore::Rm(const std::string& key)
             return;
         }
 
+        if(false == StoreToSsTable())
+        {
+            return;
+        }
 
     }
 
@@ -157,16 +222,55 @@ bool KvStore::SwitchIndex()
 bool KvStore::StoreToSsTable()
 {
     // 1. 按照时间戳生成sstable
-    std::time_t t = std::time(0);    
-    std::string path = base::CombineString("%s/%ld%s%", data_dir_.c_str(), "/", t, EXT);
-    SsTable ss;
+    SsTable ss_table;
+    std::string path = base::CombineString("%s/%ld%s%", data_dir_.c_str(), "/", std::time(0), EXT);
+    if(false == ss_table.init(path, part_size_, immutable_index_))
+    {
+        return false;
+    }
     // 清理
+    immutable_index_.clear();
+    // 删除wal tmp
+    std::string tmp_path = data_dir_ + "/" + WAL_TMP;
+    base::FolderDelete(tmp_path);
 
     // 2. 添加到sstable列表头部
-    ss_tables_.push_front(ss);
-    (void)path;
+    ss_tables_.push_front(ss_table);
 
     return true;
+}
+//---------------------------------------------------------------------------
+std::list<std::string> KvStore::GetSsTableFileList()
+{
+    std::list<std::string> res;
+    DIR* dir = opendir(data_dir_.c_str());
+    if(!dir)
+    {
+        return res;
+    }
+
+    dirent* ptr = readdir(dir); 
+    while (ptr)
+    {
+        if(strcmp(ptr->d_name,".")==0 || strcmp(ptr->d_name,"..")==0)
+        {
+            ptr = readdir(dir);
+            continue;
+        }
+
+        if(ptr->d_type == DT_REG)
+        {
+            res.push_back(ptr->d_name);
+        }
+
+        ptr = readdir(dir);
+    }
+    
+    closedir(dir);
+
+    // 按照时间排序（直接排序就好了）
+    res.sort(std::greater<std::string>());
+    return res;
 }
 //---------------------------------------------------------------------------
 
