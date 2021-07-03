@@ -10,11 +10,13 @@
 #include <map>
 #include <list>
 #include <mutex>
-#include <cstdio>
 #include <memory>
 
+#include "../thirdpart/base/include/logger.h"
+
 #include "./command/command.h"
-#include "./ss_table.h"
+//---------------------------------------------------------------------------
+class SsTable;
 //---------------------------------------------------------------------------
 namespace lsm
 {
@@ -26,17 +28,22 @@ public:
     ~KvStore();
 
 public:
+    // 初始化
+    bool Init();
+
+    void SetLogger(std::shared_ptr<base::Logger> logger);
+
     // 保存数据
-    void Set(const std::string& key, const std::string& value);
+    bool Set(const std::string& key, const std::string& value);
 
     // 获取数据
     std::string Get(const std::string& key) const;
 
     // 删除数据
-    void Rm(const std::string& key);
+    bool Rm(const std::string& key);
 
 private:
-    // 保存修改命令到WAL文件
+    // 保存命令到WAL文件
     bool WriteToWalFile(const std::shared_ptr<Command>& command);
 
     // 切换内存表
@@ -45,17 +52,23 @@ private:
     // 持久化到sstable
     bool StoreToSsTable();
 
-public:
-    static const char* EXT;     // 扩展名
-    static const char* WAL;     // 日志文件
-    static const char* RW_MODE; // 读写模式
-    static const char* WAL_TMP; // 临时日志文件
-
-private:
+    // 获取ss table 文件名列表
     std::list<std::string> GetSsTableFileList();
+
+    // 创建ss table文件路径
+    std::string CreateSsTableFilePath();
+
+    // 还原wal文件命令
+    bool ReadFromWalFile(const std::string& path);
+
+    // 合并ss-table线程
+    bool NeddMergeSsTable();
+    void MergeSsTableFile();
+    void OnMergeSsTable();
 
 private:
     using IndexMap = std::map<std::string, std::shared_ptr<Command>>;
+
     // 内存表，使用有序的map，方便转储合并
     IndexMap index_;
     
@@ -66,10 +79,12 @@ private:
     IndexMap immutable_index_;
 
     // ss-table列表
-    std::list<SsTable> ss_tables_;
+    std::list<std::shared_ptr<SsTable>> ss_tables_;
 
     // 数据目录
     std::string data_dir_;
+    std::string wal_name_;
+    std::string wal_tmp_name_;
 
     // FIXME: 优化锁，目前图简单用一把大锁
     std::mutex mutex_;
@@ -81,9 +96,8 @@ private:
     size_t part_size_;
 
     // 暂存日志文件
-    FILE* wal_file_;
+    int wal_fd_;
 };
-
 
 }//namespace lsm
 //---------------------------------------------------------------------------

@@ -15,16 +15,16 @@ using namespace base::json;
 class SetCommand : public Command
 {
 public:
-    SetCommand(const std::string& key, const std::string& value);
-
-    std::string ToString() const;
+    SetCommand(const std::string& key, const std::string& value)
+    :   Command(CommandType::SET, key)
+    {
+        value_ = value;
+    }
 
 public:
-    std::string get_key() { return key_; }
     std::string get_value() { return value_; }
 
 private:
-    std::string key_;
     std::string value_;
 };
 

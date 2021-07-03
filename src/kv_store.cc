@@ -2,39 +2,61 @@
 #include <ctime>
 #include <cstring>
 #include <cstdlib>
-
+#include <sys/time.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <fcntl.h>
 #include <sys/types.h>
 #include <dirent.h>
 
 #include "../thirdpart/base/include/function.h"
 
+#include "ss_table.h"
 #include "kv_store.h"
 #include "command/set_command.h"
 #include "command/rm_command.h"
-#include "./tools/logger.h"
+#include "tools/logger.h"
+#include "tools/command_convert.h"
 //---------------------------------------------------------------------------
 namespace lsm
 {
 
 //---------------------------------------------------------------------------
-const char* KvStore::EXT = ".table";
-const char* KvStore::WAL = "wal";
-const char* KvStore::RW_MODE = "a+";
-const char* KvStore::WAL_TMP = "wal_tmp";
+const char* EXT = ".table";         // 扩展名
+const char* WAL = "wal";            // 扩展名;
+const char* WAL_TMP = "wal_tmp";    // 扩展名
 //---------------------------------------------------------------------------
 KvStore::KvStore(const std::string& data_dir, size_t store_threshold, size_t part_size)
 {
     data_dir_ = data_dir;
+    wal_name_ = data_dir_ + "/" + WAL;
+    wal_tmp_name_ = data_dir_ + "/" + WAL_TMP;
     store_threshold_ = store_threshold;
     part_size_ = part_size;
+
+    return;
+}
+//---------------------------------------------------------------------------
+KvStore::~KvStore()
+{
+    if(wal_fd_ > 0)
+    {
+        ::close(wal_fd_);
+    }
+    Logger_debug("dctor kv store");
+}
+//---------------------------------------------------------------------------
+bool KvStore::Init()
+{
+    Logger_debug("ctor kv store->data path:%s, threshold:%ld, part_size:%ld", data_dir_.c_str(), store_threshold_, part_size_);
 
     // 生成ss table目录
     if(!base::FolderExist(data_dir_))
     {
-        if(false == base::FolderCreate(data_dir, true))
+        if(false == base::FolderCreate(data_dir_, true))
         {
             Logger_error("create data folder failed!");
-            abort();
+            return false;
         }
     }
 
@@ -42,10 +64,13 @@ KvStore::KvStore(const std::string& data_dir, size_t store_threshold, size_t par
     std::list<std::string> files = GetSsTableFileList();
     for(std::string file : files)
     {
-        // TODO: wap tmp异常文件处理
+        // wap tmp 文件，持久化时候异常，需要还原异常的命令
         if(file == WAL_TMP)
         {
-            Logger_debug("wal:%s", file.c_str());
+            if(false == ReadFromWalFile(data_dir_ + "/" + file))
+            {
+                Logger_error("restore from wal file failed:%s", file.c_str());
+            }
             continue;
         }
 
@@ -53,10 +78,10 @@ KvStore::KvStore(const std::string& data_dir, size_t store_threshold, size_t par
         size_t pos = file.find(EXT);
         if(std::string::npos != pos)
         {
-            SsTable ss_table;
-            if(false == ss_table.init(data_dir_  + "/" + file))
+            std::shared_ptr<SsTable> ss_table = std::make_shared<SsTable>();
+            if(false == ss_table->Init(data_dir_  + "/" + file))
             {
-                Logger_error("init ss table file failed:%s!", file.c_str());
+                Logger_error("init ss table file failed:%s", file.c_str());
                 continue;
             }
             ss_tables_.push_back(ss_table);
@@ -66,29 +91,30 @@ KvStore::KvStore(const std::string& data_dir, size_t store_threshold, size_t par
         // wap 文件
         if(file == WAL)
         {
-            Logger_debug("WAL:%s", file.c_str());
+            if(false == ReadFromWalFile(data_dir_ + "/" + file))
+            {
+                Logger_error("restore from wal file failed:%s", file.c_str());
+            }
             continue;
         }
     }
 
-    // 加载
-    std::string path = data_dir + "/" + WAL;
-    wal_file_ = ::fopen(path.c_str(), RW_MODE);
-    if(0 == wal_file_)
+    // 打开wal文件
+    wal_fd_ = ::open(wal_name_.c_str(), O_CREAT|O_WRONLY|O_APPEND, 0660);
+    if(wal_fd_ < 0)
     {
-        Logger_error("create wal file failed!");
-        abort();
+        Logger_error("create wal file failed:%s", tools::Logger::OsError(errno));
     }
 
-    return;
+    return true;
 }
 //---------------------------------------------------------------------------
-KvStore::~KvStore()
+void KvStore::SetLogger(std::shared_ptr<base::Logger> logger)
 {
-    ::fclose(wal_file_);
+    tools::g_logger.set_logger(logger);
 }
 //---------------------------------------------------------------------------
-void KvStore::Set(const std::string& key, const std::string& value)
+bool KvStore::Set(const std::string& key, const std::string& value)
 {
     std::shared_ptr<SetCommand> command = std::make_shared<SetCommand>(key, value);
 
@@ -102,45 +128,67 @@ void KvStore::Set(const std::string& key, const std::string& value)
     index_[key] = command;
 
     // 3.如果超过阈值进行持久化
-    if(index_.size() > store_threshold_)
+    if(index_.size() >= store_threshold_)
     {
         // 交换内存表
         if(false == SwitchIndex())
         {
-            return;
+            return false;
         }
 
         // 持久化
         if(false == StoreToSsTable())
         {
-            return;
+            return false;
         }
     }
 
-    return;
+    return true;
 }
 //---------------------------------------------------------------------------
 std::string KvStore::Get(const std::string& key) const
 {
     // 1.先从索引中查找
+    std::shared_ptr<Command> result;
     auto it = index_.find(key);
-
-    // 2.可能在持久化过程中, 尝试从不可变索引中查找
-    if(index_.end() == it && !immutable_index_.empty())
+    if(index_.end() != it)
     {
-        it = immutable_index_.find(key);
-
-        // 3.还找不到，尝试从文件中查找
-        if(immutable_index_.end() == it)
+        result = it->second;
+    }
+    else
+    {
+        // 2.可能在持久化过程中, 尝试从不可变索引中查找
+        if(!immutable_index_.empty())
         {
-            // TODO: 从ss table中查找
-            
-            return "";
+            it = immutable_index_.find(key);
+            if(immutable_index_.end() != it)
+            {
+                result = it->second;
+            }
         }
     }
 
+    // 3.还找不到，尝试从ss table中查找
+    if(!result)
+    {
+        for(auto& ss_table : ss_tables_)
+        {
+            result = ss_table->Query(key);
+            if(result)
+            {
+                break;
+            }
+        }
+    }
+
+    // 4.找不到
+    if(!result)
+    {
+        return "";
+    }
+
     // 找到
-    Command* command = it->second.get();
+    Command* command = result.get();
     if(command->get_type() == CommandType::SET)
     {
         SetCommand* set = static_cast<SetCommand*>(command);
@@ -155,7 +203,7 @@ std::string KvStore::Get(const std::string& key) const
     return "";
 }
 //---------------------------------------------------------------------------
-void KvStore::Rm(const std::string& key)
+bool KvStore::Rm(const std::string& key)
 {
     std::shared_ptr<RmCommand> command = std::make_shared<RmCommand>(key);
 
@@ -174,25 +222,32 @@ void KvStore::Rm(const std::string& key)
     {
         if(false  == SwitchIndex())
         {
-            return;
+            return false;
         }
 
         if(false == StoreToSsTable())
         {
-            return;
+            return false;
         }
 
     }
 
-    return;
+    return true;
 }
 //---------------------------------------------------------------------------
 bool KvStore::WriteToWalFile(const std::shared_ptr<Command>& command)
 {
-    std::string command_str = command->ToString();
-    size_t size = command_str.size();
-    ::fwrite(&size, sizeof(size), 1, wal_file_);
-    ::fwrite(command_str.c_str(), size, 1, wal_file_);
+    std::string command_str = tools::CommandConvert::CommandToJsonStr(command);
+    ssize_t size = command_str.size();
+    if(::write(wal_fd_, &size, sizeof(size)) != sizeof(size))
+    {
+        return false;
+    }
+    if(::write(wal_fd_, command_str.c_str(), command_str.length()) != size)
+    {
+        return false;
+    }
+    ::fdatasync(wal_fd_);
 
     return true;
 }
@@ -204,35 +259,44 @@ bool KvStore::SwitchIndex()
     index_.swap(immutable_index_);
 
     // 2. 切换wal文件
-    ::fclose(wal_file_);
-    std::string old_path = data_dir_ + "/" + WAL;
-    std::string new_path = data_dir_ + "/" + WAL_TMP;
-    if(-1 == ::rename(old_path.c_str(), new_path.c_str()))
+    ::close(wal_fd_);
+    if(-1 == ::rename(wal_name_.c_str(), wal_tmp_name_.c_str()))
     {
-        //重命名失败
-        assert(0);
+        Logger_error("switch index failed:%s", tools::Logger::OsError(errno));
         return false;
     }
 
     // 3. 重新生成wal文件
-    wal_file_ = ::fopen(old_path.c_str(), RW_MODE);
+    wal_fd_ = ::open(wal_name_.c_str(), O_CREAT|O_WRONLY|O_APPEND, 0660);
+    if(wal_fd_ < 0)
+    {
+        Logger_error("create wal file failed:%s", tools::Logger::OsError(errno));
+        return false;
+    }
+
     return true;
 }
 //---------------------------------------------------------------------------
 bool KvStore::StoreToSsTable()
 {
-    // 1. 按照时间戳生成sstable
-    SsTable ss_table;
-    std::string path = base::CombineString("%s/%ld%s%", data_dir_.c_str(), "/", std::time(0), EXT);
-    if(false == ss_table.init(path, part_size_, immutable_index_))
+    // 0. 检查是否需要合并ss-table
+    if(NeddMergeSsTable())
     {
+        MergeSsTableFile();
+    }
+
+    // 1. 按照时间戳生成sstable
+    std::shared_ptr<SsTable> ss_table = std::make_shared<SsTable>();
+    std::string path = CreateSsTableFilePath();
+    if(false == ss_table->Init(path, part_size_, immutable_index_))
+    {
+        Logger_error("ss table init failed");
         return false;
     }
     // 清理
     immutable_index_.clear();
     // 删除wal tmp
-    std::string tmp_path = data_dir_ + "/" + WAL_TMP;
-    base::FolderDelete(tmp_path);
+    base::FileDelete(wal_tmp_name_);
 
     // 2. 添加到sstable列表头部
     ss_tables_.push_front(ss_table);
@@ -273,6 +337,80 @@ std::list<std::string> KvStore::GetSsTableFileList()
     return res;
 }
 //---------------------------------------------------------------------------
+std::string KvStore::CreateSsTableFilePath()
+{
+    struct timeval t;
+    gettimeofday(&t, 0);
+    long time = static_cast<long>(static_cast<long>(t.tv_sec * 1000 * 1000) + t.tv_usec);
+    std::string path = base::CombineString("%s/%ld%s", data_dir_.c_str(), time, EXT);
+    return path;
+}
+//---------------------------------------------------------------------------
+bool KvStore::ReadFromWalFile(const std::string& path)
+{
+    int fd = ::open(path.c_str(), O_RDONLY);
+    if(fd < 0)
+    {
+        Logger_error("read wal file failed:%s", path.c_str());
+        return false;
+    }
 
+    // 读取每一条command
+    ssize_t size = 0;
+    std::string command_str;
+    while (::read(fd, &size, sizeof(size)) == sizeof(size))
+    {
+        command_str.resize(size);
+        if(::read(fd, const_cast<char*>(command_str.data()), size) != size)
+        {
+            Logger_error("read wal file failed:%s", tools::Logger::OsError(errno));
+            ::close(fd);
+            return false;
+        }
+
+        // 插入命令
+        auto command = tools::CommandConvert::JsonStrToCommand(command_str);
+        if(nullptr == command)
+        {
+            ::close(fd);
+            Logger_error("read wal file command failed:%s,%s", path.c_str(), command_str.c_str());
+            return false;
+        }
+        index_[command->get_key()] = command;
+    }
+    
+    ::close(fd);
+    return true;
+}
+//---------------------------------------------------------------------------
+bool KvStore::NeddMergeSsTable()
+{
+    if(ss_tables_.size() > 2)
+    {
+        return true;
+    }
+
+    return false;
+}
+//---------------------------------------------------------------------------
+void KvStore::MergeSsTableFile()
+{
+    base::Thread thread(std::bind(&KvStore::OnMergeSsTable, this), "merge-sstable");
+    thread.Start();
+    thread.Join();
+    return;
+}
+//---------------------------------------------------------------------------
+void KvStore::OnMergeSsTable()
+{
+    Logger_debug("start merge ss-table!");
+
+    std::shared_ptr<SsTable> ss_table = std::make_shared<SsTable>();
+    std::string path = CreateSsTableFilePath();
+    (void)path;
+    Logger_debug("end merge ss-table!");
+    return;
+}
+//---------------------------------------------------------------------------
 }//namespace lsm
 //---------------------------------------------------------------------------

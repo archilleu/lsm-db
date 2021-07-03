@@ -5,6 +5,7 @@
 #include <fcntl.h>
 
 #include "tools/logger.h"
+#include "tools/command_convert.h"
 #include "command/set_command.h"
 #include "command/rm_command.h"
 #include "ss_table.h"
@@ -27,8 +28,10 @@ SsTable::~SsTable()
     }
 }
 //---------------------------------------------------------------------------
-bool SsTable::init(const std::string& path)
+bool SsTable::Init(const std::string& path)
 {
+    Logger_debug("init ss-table from file:%s", path.c_str());
+
     path_ = path;
     fd_ = ::open(path.c_str(), O_RDONLY);
     if(fd_ < 0)
@@ -54,10 +57,12 @@ bool SsTable::init(const std::string& path)
     return true;
 }
 //---------------------------------------------------------------------------
-bool SsTable::init(const std::string& path, size_t part_size, const IndexMap& index)
+bool SsTable::Init(const std::string& path, size_t part_size, const IndexMap& index)
 {
-    fd_ = ::open(path.c_str(), O_WRONLY|O_CREAT, 0660);
-    if(!fd_)
+    Logger_debug("init ss-table from command:%s", path.c_str());
+
+    fd_ = ::open(path.c_str(), O_RDWR|O_CREAT, 0660);
+    if(fd_ < 0)
     {
         Logger_error("%s", tools::Logger::OsError(errno));
         return false;
@@ -78,6 +83,70 @@ bool SsTable::init(const std::string& path, size_t part_size, const IndexMap& in
     // 保存元数据
     metainfo_.WriteToFile(fd_);
 
+    // 刷新到磁盘
+    ::fdatasync(fd_);
+    return true;
+}
+//---------------------------------------------------------------------------
+bool SsTable::StartMerge(const std::string& path, size_t part_size)
+{
+    fd_ = ::open(path.c_str(), O_RDWR|O_CREAT, 0660);
+    if(fd_ < 0)
+    {
+        Logger_error("%s", tools::Logger::OsError(errno));
+        return false;
+    }
+    path_ = path;
+    metainfo_.set_part_size(part_size);
+
+    // 初始化分区
+    part_data_ = Value(Value::Object);
+
+    return true;
+}
+//---------------------------------------------------------------------------
+bool SsTable::Merge(const std::shared_ptr<Command>& command)
+{
+    // 不判定是否重复（重复是上层逻辑处理的）
+
+    // 插入
+    part_data_[command->get_key()] = tools::CommandConvert::CommandToJson(command);
+
+    // 到达分段大小,写入文件
+    if(part_data_.Size() >= static_cast<size_t>(metainfo_.get_part_size()))
+    {
+        if(false == WriteDataPart())
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+//---------------------------------------------------------------------------
+bool SsTable::EndMerge()
+{
+    // 还有剩余数据，写入文件
+    if(part_data_.Size() > 0)
+    {
+        if(false == WriteDataPart())
+        {
+            return false;
+        }
+    }
+
+    // 更新元数据
+    metainfo_.set_data_len(offset_);
+    metainfo_.set_index_start(offset_);
+
+    // 稀疏索引
+    SaveSpareIndex();
+
+    // 保存元数据
+    metainfo_.WriteToFile(fd_);
+
+    // 刷新到磁盘
+    ::fdatasync(fd_);
     return true;
 }
 //---------------------------------------------------------------------------
@@ -103,10 +172,13 @@ std::shared_ptr<Command> SsTable::Query(const std::string& key) const
     auto& position = iter->second;
     std::string data_str;
     data_str.resize(position.get_length());
-    ::pread(fd_, const_cast<char*>(data_str.data()), position.get_length(), position.get_index());
-    Value data;
-    JsonReader reader;
-    if(false == reader.Parse(data_str, data))
+    if(::pread(fd_, const_cast<char*>(data_str.data()), position.get_length(), position.get_index()) < 0)
+    {
+        Logger_error("read data part filed:%s", tools::Logger::OsError(errno));
+        return nullptr;
+    }
+    Value data = tools::CommandConvert::JsonStrToJson(data_str);
+    if(data == Value::NullValue)
     {
         Logger_error("read sstable data failed!");
         return nullptr;
@@ -118,25 +190,19 @@ std::shared_ptr<Command> SsTable::Query(const std::string& key) const
     {
         return nullptr;
     }
-    if(value["type"].AsUInt() == static_cast<unsigned>(CommandType::SET))
-    {
-        std::shared_ptr<Command> command = std::make_shared<SetCommand>(value["key"].AsString(), value["value"].AsString());
-        return command;
-    }
-    else
-    {
-        std::shared_ptr<Command> command = std::make_shared<RmCommand>(value["key"].AsString());
-        return command;
-    }
 
-    return nullptr;
+    return tools::CommandConvert::JsonToCommand(value);
 }
 //---------------------------------------------------------------------------
 bool SsTable::ReadMetainfo()
 {
     std::string spare_index_str;
     spare_index_str.resize(metainfo_.get_index_len());
-    ::pread(fd_, const_cast<char*>(spare_index_str.data()), spare_index_str.size(), metainfo_.get_index_start());
+    if(::pread(fd_, const_cast<char*>(spare_index_str.data()), spare_index_str.size(), metainfo_.get_index_start()) < 0)
+    {
+        Logger_error("read data part filed:%s", tools::Logger::OsError(errno));
+        return false;
+    }
 
     Value value;
     JsonReader reader;
@@ -155,46 +221,32 @@ bool SsTable::ReadMetainfo()
 //---------------------------------------------------------------------------
 bool SsTable::SaveCommand(const IndexMap& index)
 {
-    Value part_data(Value::Object);
+    // 初始化分区
+    part_data_ = Value(Value::Object);
+
     for(const auto& item : index)
     {
         const auto& command = item.second;
 
-        // set
-        if(command->get_type() == CommandType::SET)
-        {
-            SetCommand* set_command = dynamic_cast<SetCommand*>(command.get());
-        
-            Value tmp(Value::Object);
-            tmp["type"] = 0;
-            tmp["key"] = set_command->get_key();
-            tmp["value"] = set_command->get_value();
-            part_data[set_command->get_key()] = tmp;
-        }
-
-        // rm
-        if(command->get_type() == CommandType::RM)
-        {
-            RmCommand* rm_command = dynamic_cast<RmCommand*>(command.get());
-        
-            Value tmp(Value::Object);
-            tmp["type"] = 1;
-            tmp["key"] = rm_command->get_key();
-            part_data[rm_command->get_key()] = tmp;
-        }
+        part_data_[command->get_key()] = tools::CommandConvert::CommandToJson(command);
 
         // 到达分段大小,写入文件
-        if(part_data.Size() >= static_cast<size_t>(metainfo_.get_part_size()))
+        if(part_data_.Size() >= static_cast<size_t>(metainfo_.get_part_size()))
         {
-            WriteDataPart(part_data);
-            part_data = Value(Value::Object);
+            if(false == WriteDataPart())
+            {
+                return false;
+            }
         }
     }
 
     // 还有剩余数据，写入文件
-    if(part_data.Size() > 0)
+    if(part_data_.Size() > 0)
     {
-        WriteDataPart(part_data);
+        if(false == WriteDataPart())
+        {
+            return false;
+        }
     }
 
     return true;
@@ -211,23 +263,32 @@ bool SsTable::SaveSpareIndex()
         spare_index[spare.first] = tmp;
     }
     std::string str = JsonWriter(spare_index).ToString();
-    ::write(fd_, str.c_str(), str.length());
+    if(::write(fd_, str.c_str(), str.length()) != static_cast<ssize_t>(str.length()))
+    {
+        return false;
+    }
     metainfo_.set_index_len(str.length());
 
     return true;
 }
 //---------------------------------------------------------------------------
-bool SsTable::WriteDataPart(const Value& part_data)
+bool SsTable::WriteDataPart()
 {
     // 写入文件
-    std::string str = JsonWriter(part_data).ToString();
-    ::write(fd_, str.c_str(), str.length());
+    std::string str = JsonWriter(part_data_).ToString();
+    if(::write(fd_, str.c_str(), str.length()) != static_cast<ssize_t>(str.length()))
+    {
+        Logger_error("%s:%s", str.c_str(), tools::Logger::OsError(errno));
+        return false;
+    }
 
     // 记录数据段第一个key到稀疏索引中
-    std::string key = part_data.ObjectIterBegin()->first;
+    std::string key = part_data_.ObjectIterBegin()->first;
     spare_index_.insert(std::make_pair(key, Position(offset_, str.length())));
     offset_ += str.length();
 
+    // 重置分区
+    part_data_ = Value(Value::Object);
     return true;
 }
 //---------------------------------------------------------------------------

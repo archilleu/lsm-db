@@ -29,19 +29,23 @@ add_executable(${TEST_kv_store} test_kv_store.cc)
 
 set(TEST_ss_table test_ss_table)
 add_executable(${TEST_ss_table} test_ss_table.cc)
+
+set(TEST_command_convert test_command_convert)
+add_executable(${TEST_command_convert} test_command_convert.cc)
 #---------------------------------------------------------------------------
 #add link lib
 set(LIBNAME lsmdb)
 set(LIBTOOLS tools)
-set(LIBCOMMAND command)
 
 target_link_libraries(${TEST_lsm_db} ${LIBNAME} ${LIBTOOLS} ${LIBBASE} pthread)
 
 target_link_libraries(${TEST_ss_table_metainfo} ${LIBNAME} ${LIBTOOLS} ${LIBBASE} pthread)
 
-target_link_libraries(${TEST_kv_store} ${LIBNAME} ${LIBTOOLS} ${LIBCOMMAND} ${LIBBASE} pthread)
+target_link_libraries(${TEST_kv_store} ${LIBNAME} ${LIBTOOLS} ${LIBBASE} pthread)
 
-target_link_libraries(${TEST_ss_table} ${LIBNAME} ${LIBTOOLS} ${LIBCOMMAND} ${LIBBASE} pthread)
+target_link_libraries(${TEST_ss_table} ${LIBNAME} ${LIBTOOLS} ${LIBBASE} pthread)
+
+target_link_libraries(${TEST_command_convert} ${LIBNAME} ${LIBTOOLS} ${LIBBASE} pthread)
 #---------------------------------------------------------------------------
 #add test
 add_test(${TEST_lsm_db} ${EXECUTABLE_OUTPUT_PATH}/${TEST_lsm_db})
@@ -52,4 +56,6 @@ add_test(${TEST_ss_table_metainfo}
 add_test(${TEST_kv_store} ${EXECUTABLE_OUTPUT_PATH}/${TEST_kv_store})
 
 add_test(${TEST_ss_table} ${EXECUTABLE_OUTPUT_PATH}/${TEST_ss_table})
+
+add_test(${TEST_ss_table} ${EXECUTABLE_OUTPUT_PATH}/${TEST_command_convert})
 #---------------------------------------------------------------------------

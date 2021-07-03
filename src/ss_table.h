@@ -26,11 +26,17 @@ public:
 public:
     using IndexMap = std::map<std::string, std::shared_ptr<Command>>;
 
-    bool init(const std::string& path);
-    bool init(const std::string& path, size_t part_size, const IndexMap& index);
+    // 初始化
+    bool Init(const std::string& path);
+    bool Init(const std::string& path, size_t part_size, const IndexMap& index);
 
-public:
+    // 查询
     std::shared_ptr<Command> Query(const std::string& key) const;
+
+    // 合并
+    bool StartMerge(const std::string& path, size_t part_size);
+    bool Merge(const std::shared_ptr<Command>& command);
+    bool EndMerge();
 
 private:
     bool ReadMetainfo();
@@ -39,7 +45,7 @@ private:
 
     bool SaveSpareIndex();
 
-    bool WriteDataPart(const Value& part_data);
+    bool WriteDataPart();
 
 private:
     // 表元数据
@@ -56,6 +62,9 @@ private:
 
     // 写文件偏移
     size_t offset_;
+
+    // 保存的时候临时分区数据存储
+    Value part_data_;
 };
 
 

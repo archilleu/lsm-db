@@ -15,15 +15,11 @@ using namespace base::json;
 class RmCommand : public Command
 {
 public:
-    RmCommand(const std::string& key);
+    RmCommand(const std::string& key)
+    :   Command(CommandType::RM, key)
+    {
 
-    std::string ToString() const;
-
-public:
-    std::string get_key() { return key_; }
-
-private:
-    std::string key_;
+    }
 };
 
 
