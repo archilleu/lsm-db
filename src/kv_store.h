@@ -42,6 +42,9 @@ public:
     // 删除数据
     bool Rm(const std::string& key);
 
+public:
+    void OnMergeSsTable();
+
 private:
     // 保存命令到WAL文件
     bool WriteToWalFile(const std::shared_ptr<Command>& command);
@@ -53,6 +56,8 @@ private:
     bool StoreToSsTable();
 
     // 获取ss table 文件名列表
+    std::list<std::string> GetKvStoreFileList();
+
     std::list<std::string> GetSsTableFileList();
 
     // 创建ss table文件路径
@@ -64,7 +69,6 @@ private:
     // 合并ss-table线程
     bool NeddMergeSsTable();
     void MergeSsTableFile();
-    void OnMergeSsTable();
 
 private:
     using IndexMap = std::map<std::string, std::shared_ptr<Command>>;

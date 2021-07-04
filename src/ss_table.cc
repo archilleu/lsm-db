@@ -100,7 +100,7 @@ bool SsTable::StartMerge(const std::string& path, size_t part_size)
     metainfo_.set_part_size(part_size);
 
     // 初始化分区
-    part_data_ = Value(Value::Object);
+    part_data_ = Value(Value::Array);
 
     return true;
 }
@@ -109,8 +109,8 @@ bool SsTable::Merge(const std::shared_ptr<Command>& command)
 {
     // 不判定是否重复（重复是上层逻辑处理的）
 
-    // 插入
-    part_data_[command->get_key()] = tools::CommandConvert::CommandToJson(command);
+    // 添加
+    part_data_.ArrayAppend(tools::CommandConvert::CommandToJson(command));
 
     // 到达分段大小,写入文件
     if(part_data_.Size() >= static_cast<size_t>(metainfo_.get_part_size()))
@@ -184,14 +184,17 @@ std::shared_ptr<Command> SsTable::Query(const std::string& key) const
         return nullptr;
     }
 
-    // 3.查询
-    const Value& value = data.ObjectGet(key);
-    if(Value::NullValue == value)
+    // 3.查询(TODO:二分查找)
+    for(auto it=data.ArrayIterBegin(); it!=data.ArrayIterEnd(); it++)
     {
-        return nullptr;
+        const Value& value = *it;
+        if(value["key"].AsString() == key)
+        {
+            return tools::CommandConvert::JsonToCommand(value);
+        }
     }
 
-    return tools::CommandConvert::JsonToCommand(value);
+    return nullptr;
 }
 //---------------------------------------------------------------------------
 bool SsTable::ReadMetainfo()
@@ -222,13 +225,13 @@ bool SsTable::ReadMetainfo()
 bool SsTable::SaveCommand(const IndexMap& index)
 {
     // 初始化分区
-    part_data_ = Value(Value::Object);
+    part_data_ = Value(Value::Array);
 
     for(const auto& item : index)
     {
         const auto& command = item.second;
 
-        part_data_[command->get_key()] = tools::CommandConvert::CommandToJson(command);
+        part_data_.ArrayAppend(tools::CommandConvert::CommandToJson(command));
 
         // 到达分段大小,写入文件
         if(part_data_.Size() >= static_cast<size_t>(metainfo_.get_part_size()))
@@ -283,12 +286,12 @@ bool SsTable::WriteDataPart()
     }
 
     // 记录数据段第一个key到稀疏索引中
-    std::string key = part_data_.ObjectIterBegin()->first;
+    std::string key = part_data_.ArrayIterBegin()->ObjectGet("key").AsString();
     spare_index_.insert(std::make_pair(key, Position(offset_, str.length())));
     offset_ += str.length();
 
     // 重置分区
-    part_data_ = Value(Value::Object);
+    part_data_ = Value(Value::Array);
     return true;
 }
 //---------------------------------------------------------------------------

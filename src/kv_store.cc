@@ -61,7 +61,7 @@ bool KvStore::Init()
     }
 
     // 加载ss table
-    std::list<std::string> files = GetSsTableFileList();
+    std::list<std::string> files = GetKvStoreFileList();
     for(std::string file : files)
     {
         // wap tmp 文件，持久化时候异常，需要还原异常的命令
@@ -235,6 +235,37 @@ bool KvStore::Rm(const std::string& key)
     return true;
 }
 //---------------------------------------------------------------------------
+void KvStore::OnMergeSsTable()
+{
+    Logger_debug("start merge ss-table!");
+
+    std::shared_ptr<SsTable> ss_table = std::make_shared<SsTable>();
+    std::string path = CreateSsTableFilePath();
+    if(false == ss_table->StartMerge(path, part_size_))
+    {
+        Logger_error("start merge failed");
+        return;
+    }
+
+    // 遍历ss_table
+    std::list<std::string> files = GetSsTableFileList();
+    for(std::string file : files)
+    {
+        Logger_info("%s", file.c_str());
+    }
+
+    // TODO:查询过程处理、在生成ssstable过程处理
+    
+    if(false == ss_table->EndMerge())
+    {
+        Logger_error("end merge failed");
+        return;
+    }
+
+    Logger_debug("end merge ss-table!");
+    return;
+}
+//---------------------------------------------------------------------------
 bool KvStore::WriteToWalFile(const std::shared_ptr<Command>& command)
 {
     std::string command_str = tools::CommandConvert::CommandToJsonStr(command);
@@ -282,7 +313,7 @@ bool KvStore::StoreToSsTable()
     // 0. 检查是否需要合并ss-table
     if(NeddMergeSsTable())
     {
-        MergeSsTableFile();
+        //MergeSsTableFile();
     }
 
     // 1. 按照时间戳生成sstable
@@ -304,7 +335,7 @@ bool KvStore::StoreToSsTable()
     return true;
 }
 //---------------------------------------------------------------------------
-std::list<std::string> KvStore::GetSsTableFileList()
+std::list<std::string> KvStore::GetKvStoreFileList()
 {
     std::list<std::string> res;
     DIR* dir = opendir(data_dir_.c_str());
@@ -317,6 +348,39 @@ std::list<std::string> KvStore::GetSsTableFileList()
     while (ptr)
     {
         if(strcmp(ptr->d_name,".")==0 || strcmp(ptr->d_name,"..")==0)
+        {
+            ptr = readdir(dir);
+            continue;
+        }
+
+        if(ptr->d_type == DT_REG)
+        {
+            res.push_back(ptr->d_name);
+        }
+
+        ptr = readdir(dir);
+    }
+    
+    closedir(dir);
+
+    // 按照时间排序（直接排序就好了）
+    res.sort(std::greater<std::string>());
+    return res;
+}
+//---------------------------------------------------------------------------
+std::list<std::string> KvStore::GetSsTableFileList()
+{
+    std::list<std::string> res;
+    DIR* dir = opendir(data_dir_.c_str());
+    if(!dir)
+    {
+        return res;
+    }
+
+    dirent* ptr = readdir(dir); 
+    while (ptr)
+    {
+        if(strcmp(ptr->d_name, ".")==0 || strcmp(ptr->d_name, "..")==0 || strstr(ptr->d_name, EXT)==0)
         {
             ptr = readdir(dir);
             continue;
@@ -398,17 +462,6 @@ void KvStore::MergeSsTableFile()
     base::Thread thread(std::bind(&KvStore::OnMergeSsTable, this), "merge-sstable");
     thread.Start();
     thread.Join();
-    return;
-}
-//---------------------------------------------------------------------------
-void KvStore::OnMergeSsTable()
-{
-    Logger_debug("start merge ss-table!");
-
-    std::shared_ptr<SsTable> ss_table = std::make_shared<SsTable>();
-    std::string path = CreateSsTableFilePath();
-    (void)path;
-    Logger_debug("end merge ss-table!");
     return;
 }
 //---------------------------------------------------------------------------

@@ -14,7 +14,7 @@ using namespace lsm;
 bool TestStore()
 {
     // 构建命令
-    int size = 10200;
+    int size = 10240;
     std::string key = "key";
     std::string value = "value";
     std::map<std::string, std::shared_ptr<Command>> index;
@@ -44,9 +44,9 @@ bool TestStore()
         SsTable ss_table;
         if(false == ss_table.Init(path))
         {
+            assert(0);
         }
         // 没找到
-
         if(ss_table.Query("not find"))
         {
             assert(0);
