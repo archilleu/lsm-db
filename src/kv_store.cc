@@ -23,8 +23,34 @@ namespace lsm
 
 //---------------------------------------------------------------------------
 const char* EXT = ".table";         // 扩展名
-const char* WAL = "wal";            // 扩展名;
-const char* WAL_TMP = "wal_tmp";    // 扩展名
+const char* WAL = "wal";            // 操作日志文件
+const char* WAL_TMP = "wal_tmp";    // 临时操作日志文件
+const char* NULL_VALUE = "";        // 空值
+//---------------------------------------------------------------------------
+class CommandSsTablePair
+{
+public:
+    CommandSsTablePair(const std::shared_ptr<Command>& cmd, const std::shared_ptr<SsTable>& table)
+    {
+        command = cmd;
+        ss_table = table;
+    }
+
+    std::shared_ptr<Command> command;
+    std::shared_ptr<SsTable> ss_table;
+
+    /**
+     * set容器在判定已有元素a和新插入元素b是否相等时，是这么做的：
+     * 1）将a作为左操作数，b作为有操作数，调用比较函数，并返回比较值  
+     * 2）将b作为左操作数，a作为有操作数，再调用一次比较函数，并返回比较值。
+     * 如果1、2两步的返回值都是false，则认为a、b是相等的，则b不会被插入set容器中；
+     * 如果1、2两步的返回值都是true，则可能发生未知行为，因此，记住一个准则：永远让比较函数对相同元素返回false。
+    */
+    bool operator<(const CommandSsTablePair& other) const
+    {
+        return command->get_key() < other.command->get_key();
+    }
+};
 //---------------------------------------------------------------------------
 KvStore::KvStore(const std::string& data_dir, size_t store_threshold, size_t part_size)
 {
@@ -33,6 +59,7 @@ KvStore::KvStore(const std::string& data_dir, size_t store_threshold, size_t par
     wal_tmp_name_ = data_dir_ + "/" + WAL_TMP;
     store_threshold_ = store_threshold;
     part_size_ = part_size;
+    is_maintain_ = false;
 
     return;
 }
@@ -43,12 +70,19 @@ KvStore::~KvStore()
     {
         ::close(wal_fd_);
     }
+
+    while(is_maintain_.load(std::memory_order_acquire))
+    {
+        ::sleep(1);
+        Logger_info("waiting for store or merge sstable done!");
+    }
+
     Logger_debug("dctor kv store");
 }
 //---------------------------------------------------------------------------
 bool KvStore::Init()
 {
-    Logger_debug("ctor kv store->data path:%s, threshold:%ld, part_size:%ld", data_dir_.c_str(), store_threshold_, part_size_);
+    Logger_debug("initializing kv store:data path:%s, threshold:%ld, part_size:%ld", data_dir_.c_str(), store_threshold_, part_size_);
 
     // 生成ss table目录
     if(!base::FolderExist(data_dir_))
@@ -67,9 +101,13 @@ bool KvStore::Init()
         // wap tmp 文件，持久化时候异常，需要还原异常的命令
         if(file == WAL_TMP)
         {
-            if(false == ReadFromWalFile(data_dir_ + "/" + file))
+            if(false == ReadFromWalFile(wal_tmp_name_))
             {
                 Logger_error("restore from wal file failed:%s", file.c_str());
+            }
+            else
+            {
+                base::FileDelete(wal_tmp_name_);
             }
             continue;
         }
@@ -91,7 +129,7 @@ bool KvStore::Init()
         // wap 文件
         if(file == WAL)
         {
-            if(false == ReadFromWalFile(data_dir_ + "/" + file))
+            if(false == ReadFromWalFile(wal_name_))
             {
                 Logger_error("restore from wal file failed:%s", file.c_str());
             }
@@ -106,6 +144,7 @@ bool KvStore::Init()
         Logger_error("create wal file failed:%s", tools::Logger::OsError(errno));
     }
 
+    Logger_debug("initializd kv store:data path:%s, threshold:%ld, part_size:%ld", data_dir_.c_str(), store_threshold_, part_size_);
     return true;
 }
 //---------------------------------------------------------------------------
@@ -117,53 +156,34 @@ void KvStore::SetLogger(std::shared_ptr<base::Logger> logger)
 bool KvStore::Set(const std::string& key, const std::string& value)
 {
     std::shared_ptr<SetCommand> command = std::make_shared<SetCommand>(key, value);
-
-    // FIXME: 细化锁
-    std::lock_guard<std::mutex> guard(mutex_);
-
-    // 1.写到wal文件
-    WriteToWalFile(command);
-
-    // 2.写到index
-    index_[key] = command;
-
-    // 3.如果超过阈值进行持久化
-    if(index_.size() >= store_threshold_)
-    {
-        // 交换内存表
-        if(false == SwitchIndex())
-        {
-            return false;
-        }
-
-        // 持久化
-        if(false == StoreToSsTable())
-        {
-            return false;
-        }
-    }
-
-    return true;
+    return SetOrRm(command);
 }
 //---------------------------------------------------------------------------
-std::string KvStore::Get(const std::string& key) const
+std::string KvStore::Get(const std::string& key)
 {
     // 1.先从索引中查找
     std::shared_ptr<Command> result;
-    auto it = index_.find(key);
-    if(index_.end() != it)
     {
-        result = it->second;
-    }
-    else
-    {
-        // 2.可能在持久化过程中, 尝试从不可变索引中查找
-        if(!immutable_index_.empty())
+        std::lock_guard<std::mutex> guard(index_mutex_);
+        auto it = index_.find(key);
+        if(index_.end() != it)
         {
-            it = immutable_index_.find(key);
-            if(immutable_index_.end() != it)
+            result = it->second;
+        }
+    }
+
+    // 2.可能在持久化过程中, 尝试从不可变索引中查找
+    {
+        if(!result)
+        {
+            std::lock_guard<std::mutex> guard(immutable_index_mutex_);
+            if(!immutable_index_.empty())
             {
-                result = it->second;
+                auto it = immutable_index_.find(key);
+                if(immutable_index_.end() != it)
+                {
+                    result = it->second;
+                }
             }
         }
     }
@@ -171,6 +191,9 @@ std::string KvStore::Get(const std::string& key) const
     // 3.还找不到，尝试从ss table中查找
     if(!result)
     {
+        // 查询的时候锁定ss_tables_，如果在合并ss_tables过程中，锁时间很短，不影响查询性能
+        // TODO:复制一份ss_tables?复制过程比较耗时，还不如直接锁
+        std::lock_guard<std::mutex> guard(ss_tables_mutex_);
         for(auto& ss_table : ss_tables_)
         {
             result = ss_table->Query(key);
@@ -184,7 +207,7 @@ std::string KvStore::Get(const std::string& key) const
     // 4.找不到
     if(!result)
     {
-        return "";
+        return NULL_VALUE;
     }
 
     // 找到
@@ -194,82 +217,67 @@ std::string KvStore::Get(const std::string& key) const
         SetCommand* set = static_cast<SetCommand*>(command);
         return set->get_value();
     }
-
-    if(command->get_type() == CommandType::RM)
+    else
     {
-        return "";
+        // rm command, null value
+        return NULL_VALUE;
     }
-
-    return "";
 }
 //---------------------------------------------------------------------------
 bool KvStore::Rm(const std::string& key)
 {
     std::shared_ptr<RmCommand> command = std::make_shared<RmCommand>(key);
-
-    {
-    std::lock_guard<std::mutex> guard(mutex_);
-
-    // 1.写到wal文件
-    WriteToWalFile(command);
-
-    // 2.写到index
-    index_[key] = command;
-    }
-
-    // 3.如果超过阈值进行持久化
-    if(index_.size() > store_threshold_)
-    {
-        if(false  == SwitchIndex())
-        {
-            return false;
-        }
-
-        if(false == StoreToSsTable())
-        {
-            return false;
-        }
-
-    }
-
-    return true;
+    return SetOrRm(command);
 }
 //---------------------------------------------------------------------------
-void KvStore::OnMergeSsTable()
+bool KvStore::SetOrRm(std::shared_ptr<Command> command)
 {
-    Logger_debug("start merge ss-table!");
-
-    std::shared_ptr<SsTable> ss_table = std::make_shared<SsTable>();
-    std::string path = CreateSsTableFilePath();
-    if(false == ss_table->StartMerge(path, part_size_))
+    // 1.写到wal文件
+    if(false == WriteToWalFile(command))
     {
-        Logger_error("start merge failed");
-        return;
+        return false;
     }
 
-    // 遍历ss_table
-    std::list<std::string> files = GetSsTableFileList();
-    for(std::string file : files)
     {
-        Logger_info("%s", file.c_str());
+        // 2.写到index
+        std::lock_guard<std::mutex> guard(index_mutex_);
+        index_[command->get_key()] = command;
+
+        // 3.如果不超过阈值直接返回
+        if(index_.size() < store_threshold_)
+        {
+            return true;
+        }
+
+        // 4.sstable维护中，直接返回，不支持多线程维护sstable
+        if(is_maintain_.load(std::memory_order_acquire))
+        {
+            Logger_warn("sstable maintainning");
+            return true;
+        }
+
+
+        // 5.交换内存索引
+        std::lock_guard<std::mutex> immutable_guard(immutable_index_mutex_);
+        index_.swap(immutable_index_);
     }
 
-    // TODO:查询过程处理、在生成ssstable过程处理
-    
-    if(false == ss_table->EndMerge())
-    {
-        Logger_error("end merge failed");
-        return;
-    }
+    //重新创建wal文件
+    CreateNewWalFile();
 
-    Logger_debug("end merge ss-table!");
-    return;
+    // 开始维护sstable线程
+    std::thread t(&KvStore::OnMaintainSsTable, this);
+    t.detach();
+
+    return true;
 }
 //---------------------------------------------------------------------------
 bool KvStore::WriteToWalFile(const std::shared_ptr<Command>& command)
 {
     std::string command_str = tools::CommandConvert::CommandToJsonStr(command);
     ssize_t size = command_str.size();
+
+    std::lock_guard<std::mutex> guard(wal_mutex_);
     if(::write(wal_fd_, &size, sizeof(size)) != sizeof(size))
     {
         return false;
@@ -283,13 +291,81 @@ bool KvStore::WriteToWalFile(const std::shared_ptr<Command>& command)
     return true;
 }
 //---------------------------------------------------------------------------
-bool KvStore::SwitchIndex()
+void KvStore::OnMaintainSsTable()
 {
-    // 1. 把数据转移到不可变内存表中
-    assert(((void)"imutable_index not null", immutable_index_.empty()));
-    index_.swap(immutable_index_);
+    // 是否需要合并ss-table
+    MergeSsTable();
 
-    // 2. 切换wal文件
+    // 持久化sstable
+    StoreToSsTable();
+
+    is_maintain_ = false;
+}
+//---------------------------------------------------------------------------
+void KvStore::MergeSsTable()
+{
+    // 判断是否需要合并
+    {
+        std::lock_guard<std::mutex> guard(ss_tables_mutex_);
+        if(ss_tables_.size() < 2)
+        {
+            return;
+        }
+    }
+
+    Logger_debug("start merge ss-table!");
+
+    // 获取当前所有ss_table
+    std::vector<std::shared_ptr<SsTable>> ss_tables = GetMergeSsTables();
+
+    // 生成merge sstable
+    std::shared_ptr<SsTable> merge_ss_table = std::make_shared<SsTable>();
+    std::string path = CreateSsTableFilePath();
+
+    // 开始合并
+    if(false == merge_ss_table->StartMerge(path, part_size_))
+    {
+        Logger_error("start merge failed");
+        return;
+    }
+
+    MergeSstables(ss_tables, merge_ss_table);
+    
+    if(false == merge_ss_table->EndMerge())
+    {
+        Logger_error("end merge failed");
+        return;
+    }
+    
+    // 合并完成后移除合并过的sstable
+    {
+        std::lock_guard<std::mutex> guard(ss_tables_mutex_);
+        for(auto it=ss_tables.begin(); it!=ss_tables.end(); it++)
+        {
+            for(auto iter=ss_tables_.begin(); iter!=ss_tables_.end();)
+            {
+                if((*it)->get_path() == (*iter)->get_path())
+                {
+                    ss_tables_.erase(iter++);
+                    base::FileDelete((*it)->get_path());
+                }
+                else
+                {
+                    ++iter;
+                }
+            }
+        }
+        ss_tables_.push_back(merge_ss_table);
+    }
+
+    Logger_debug("end merge ss-table!");
+    return;
+}
+//---------------------------------------------------------------------------
+bool KvStore::CreateNewWalFile()
+{
+    // 切换wal文件
+    std::lock_guard<std::mutex> guard(wal_mutex_);
     ::close(wal_fd_);
     if(-1 == ::rename(wal_name_.c_str(), wal_tmp_name_.c_str()))
     {
@@ -297,7 +373,7 @@ bool KvStore::SwitchIndex()
         return false;
     }
 
-    // 3. 重新生成wal文件
+    // 重新生成wal文件
     wal_fd_ = ::open(wal_name_.c_str(), O_CREAT|O_WRONLY|O_APPEND, 0660);
     if(wal_fd_ < 0)
     {
@@ -310,12 +386,6 @@ bool KvStore::SwitchIndex()
 //---------------------------------------------------------------------------
 bool KvStore::StoreToSsTable()
 {
-    // 0. 检查是否需要合并ss-table
-    if(NeddMergeSsTable())
-    {
-        //MergeSsTableFile();
-    }
-
     // 1. 按照时间戳生成sstable
     std::shared_ptr<SsTable> ss_table = std::make_shared<SsTable>();
     std::string path = CreateSsTableFilePath();
@@ -324,13 +394,21 @@ bool KvStore::StoreToSsTable()
         Logger_error("ss table init failed");
         return false;
     }
-    // 清理
-    immutable_index_.clear();
-    // 删除wal tmp
-    base::FileDelete(wal_tmp_name_);
 
     // 2. 添加到sstable列表头部
-    ss_tables_.push_front(ss_table);
+    {
+        std::lock_guard<std::mutex> guard(ss_tables_mutex_);
+        ss_tables_.push_front(ss_table);
+    }
+
+    // 3. 清理
+    {
+        std::lock_guard<std::mutex> guard(immutable_index_mutex_);
+        immutable_index_.clear();
+    }
+
+    // 4. 删除wal tmp
+    base::FileDelete(wal_tmp_name_);
 
     return true;
 }
@@ -447,22 +525,112 @@ bool KvStore::ReadFromWalFile(const std::string& path)
     return true;
 }
 //---------------------------------------------------------------------------
-bool KvStore::NeddMergeSsTable()
+std::vector<std::shared_ptr<SsTable>> KvStore::GetMergeSsTables()
 {
-    if(ss_tables_.size() > 2)
+    // 遍历ss_table
+    std::vector<std::shared_ptr<SsTable>> ss_tables;
+    std::list<std::string> files = GetSsTableFileList();
+    for(std::string file : files)
     {
-        return true;
+        std::shared_ptr<SsTable> table = std::make_shared<SsTable>();
+        if(false == table->Init(data_dir_  + "/" + file))
+        {
+            Logger_info("init ss table failed:%s", file.c_str());
+            continue;
+        }
+        if(false == table->Begin())
+        {
+            Logger_info("traverse sstable failed:%s", file.c_str());
+            continue;
+        }
+
+        ss_tables.push_back(table);
     }
 
-    return false;
+    return ss_tables;
 }
 //---------------------------------------------------------------------------
-void KvStore::MergeSsTableFile()
+void TrimList(std::list<CommandSsTablePair>& list)
 {
-    base::Thread thread(std::bind(&KvStore::OnMergeSsTable, this), "merge-sstable");
-    thread.Start();
-    thread.Join();
-    return;
+    if(list.size() > 1)
+    {
+        auto first = list.begin();
+        auto second = ++list.begin();
+        if(first->command->get_key() == second->command->get_key())
+        {
+            std::list<CommandSsTablePair>::const_iterator iter;
+            if(first->command->get_timestamp() > second->command->get_timestamp())
+            {
+                iter = second;
+            }
+            else
+            {
+                iter = first;
+            }
+            if(iter->ss_table->HasNext())
+            {
+                CommandSsTablePair pair(iter->ss_table->Next(), iter->ss_table);
+                list.erase(iter);
+                list.push_back(pair);
+            }
+            else
+            {
+                list.erase(iter);
+            }
+
+            list.sort();
+        }
+    }
+}
+//---------------------------------------------------------------------------
+bool KvStore::MergeSstables(const std::vector<std::shared_ptr<SsTable>>& ss_tables, const std::shared_ptr<SsTable>& merge_ss_table)
+{
+    // 初始化
+    std::list<CommandSsTablePair> list;
+    for(auto& table : ss_tables)
+    {
+        if(true == table->HasNext())
+        {
+            auto command = table->Next();
+            if(command)
+            {
+                list.push_back(CommandSsTablePair(command, table));
+            }
+        }
+    }
+    list.sort();
+
+    /**
+     * 归并排序
+     * https://juejin.cn/post/6844903762621005837
+     */
+
+    // 取最小元素
+    while (!list.empty())
+    {
+        TrimList(list);
+        auto min = list.begin();
+        if(min->ss_table->HasNext())
+        {
+            auto next_command = min->ss_table->Next();
+            auto& cur_command = min->command;
+
+            // 不可能相等
+            // if(command->get_key() == next_command->get_key()){}
+
+            merge_ss_table->Merge(cur_command);
+            list.erase(min);
+            list.push_back(CommandSsTablePair(next_command, min->ss_table));
+            list.sort();
+        }
+        else
+        {
+            merge_ss_table->Merge(min->command);
+            list.erase(min);
+        }
+    }
+    
+    return true;
 }
 //---------------------------------------------------------------------------
 }//namespace lsm

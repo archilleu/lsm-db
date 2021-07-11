@@ -17,11 +17,11 @@ public:
     Command()
     {}
 
-    Command(CommandType type, const std::string& key)
+    Command(CommandType type, const std::string& key, base::Timestamp timestamp)
     {
         type_ = type;
         key_ = key;
-        timestamp_ = base::Timestamp::Now();
+        timestamp_ = timestamp;
     }
     virtual ~Command(){}
 

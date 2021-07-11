@@ -4,9 +4,11 @@
 //---------------------------------------------------------------------------
 #include <string>
 #include <map>
+#include <set>
 #include <memory>
 
 #include "../thirdpart/base/include/json/json.h"
+#include "../thirdpart/base/include/noncopyable.h"
 
 #include "./command/command.h"
 #include "ss_table_metainfo.h"
@@ -17,7 +19,7 @@ using namespace base::json;
 namespace lsm
 {
 
-class SsTable
+class SsTable : public base::Noncopyable
 {
 public:
     SsTable();
@@ -33,10 +35,17 @@ public:
     // 查询
     std::shared_ptr<Command> Query(const std::string& key) const;
 
+    // 遍历全部数据
+    bool Begin();
+    bool HasNext();
+    std::shared_ptr<Command> Next();
+
     // 合并
     bool StartMerge(const std::string& path, size_t part_size);
     bool Merge(const std::shared_ptr<Command>& command);
     bool EndMerge();
+
+    std::string get_path() const { return path_; }
 
 private:
     bool ReadMetainfo();
@@ -65,6 +74,12 @@ private:
 
     // 保存的时候临时分区数据存储
     Value part_data_;
+
+    // 遍历
+    std::set<Position> positions_;
+    std::set<Position>::const_iterator cur_position_;
+    Value cur_part_data_;
+    Value::ArrayValueIter cur_position_iter_;
 };
 
 

@@ -10,6 +10,8 @@ namespace lsm
 class Position
 {
 public:
+    Position(){}
+
     Position(size_t index, size_t length)
     {
         index_ = index;
@@ -19,6 +21,11 @@ public:
 public:
     size_t get_index() const { return index_; }
     size_t get_length() const { return length_; }
+
+    bool operator<(const Position& right) const
+    {
+        return index_ < right.index_;
+    }
 
 private:
     size_t index_;

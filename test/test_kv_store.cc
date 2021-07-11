@@ -11,11 +11,14 @@
 //---------------------------------------------------------------------------
 using namespace lsm;
 //---------------------------------------------------------------------------
+int size = 1000;
+size_t store_threshold = 37;
+size_t part_size = 7;
+std::string key = "key";
+std::string value = "value";
+//---------------------------------------------------------------------------
 void TestKvStore()
 {
-    int size = 1024;
-    size_t store_threshold = 130;
-    size_t part_size = 13;
     KvStore kv_store("/tmp/data", store_threshold, part_size);
     base::Logger::stdout_logger_mt();
     auto logger = base::Logger::file_stdout_logger_mt("/tmp/lsm-log", true);
@@ -27,8 +30,6 @@ void TestKvStore()
         return;
     }
 
-    std::string key = "key";
-    std::string value = "value";
     for(int i=0; i<size; i++)
     {
         std::string key_tmp = base::CombineString("%s%d", key.c_str(), i);
@@ -49,7 +50,6 @@ void TestKvStore()
         assert(value_tmp == get_value);
     }
 
-/*
     for(int i=0; i<size; i++)
     {
         std::string key_tmp = base::CombineString("%s%d", key.c_str(), i);
@@ -66,32 +66,13 @@ void TestKvStore()
         std::string get_value = kv_store.Get(key_tmp);
         assert(get_value.empty());
     }
-    */
 
-}
-//---------------------------------------------------------------------------
-void TestMerge()
-{
-    size_t store_threshold = 130;
-    size_t part_size = 13;
-    KvStore kv_store("/tmp/data", store_threshold, part_size);
-    base::Logger::stdout_logger_mt();
-    auto logger = base::Logger::file_stdout_logger_mt("/tmp/lsm-log", true);
-    kv_store.SetLogger(logger);
-    if(false == kv_store.Init())
-    {
-        std::cout << "init failed" << std::endl;
-        assert(0);
-        return;
-    }
-
-    kv_store.OnMergeSsTable();
 }
 //---------------------------------------------------------------------------
 int main(int, char**)
 {
-    // TestKvStore();
+    TestKvStore();
 
-    TestMerge();
     return 0;
 }
+//---------------------------------------------------------------------------

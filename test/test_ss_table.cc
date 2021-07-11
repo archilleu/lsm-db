@@ -11,6 +11,10 @@
 //---------------------------------------------------------------------------
 using namespace lsm;
 //---------------------------------------------------------------------------
+const char* path = "/tmp/test.txt";
+const char* merge_path = "/tmp/merge.txt";
+const char* traverse_path = merge_path;
+//---------------------------------------------------------------------------
 bool TestStore()
 {
     // 构建命令
@@ -30,7 +34,6 @@ bool TestStore()
     }
 
     // 持久化
-    const char* path = "/tmp/test.txt";
     {
         SsTable ss_table;
         if(false == ss_table.Init(path, 13, index))
@@ -94,7 +97,6 @@ bool TestMerge()
 {
     size_t size = 10240;
     size_t part_size = 130;
-    const char* merge_path = "/tmp/merge.txt";
     {
         SsTable ss_table;
         if(false == ss_table.StartMerge(merge_path, part_size))
@@ -149,10 +151,34 @@ bool TestMerge()
     return true;
 }
 //---------------------------------------------------------------------------
+bool TestTraverse()
+{
+    SsTable ss_table;
+    if(false == ss_table.Init(traverse_path))
+    {
+        assert(0);
+    }
+
+    if(false == ss_table.Begin())
+    {
+        assert(0);
+    }
+
+    while(ss_table.HasNext())
+    {
+        auto command = ss_table.Next();
+        std::cout << tools::CommandConvert::CommandToJsonStr(command) << std::endl;
+    }
+
+    return true;
+}
+//---------------------------------------------------------------------------
 int main(int, char**)
 {
     TestStore();
 
     TestMerge();
+
+    TestTraverse();
     return 0;
 }

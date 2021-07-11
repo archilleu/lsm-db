@@ -109,6 +109,12 @@ bool SsTable::Merge(const std::shared_ptr<Command>& command)
 {
     // 不判定是否重复（重复是上层逻辑处理的）
 
+    // 如果是RM命令跳过
+    if(command->get_type() == CommandType::RM)
+    {
+        return true;
+    }
+
     // 添加
     part_data_.ArrayAppend(tools::CommandConvert::CommandToJson(command));
 
@@ -192,6 +198,74 @@ std::shared_ptr<Command> SsTable::Query(const std::string& key) const
         {
             return tools::CommandConvert::JsonToCommand(value);
         }
+    }
+
+    return nullptr;
+}
+//---------------------------------------------------------------------------
+bool SsTable::Begin()
+{
+    for(auto pair : spare_index_)
+    {
+        positions_.insert(pair.second);
+    }
+    cur_position_ = positions_.begin();
+    cur_part_data_ = Value(Value::Array);
+    cur_position_iter_ = cur_part_data_.ArrayIterEnd();
+
+    return true;
+}
+//---------------------------------------------------------------------------
+bool SsTable::HasNext()
+{
+    if(cur_position_iter_ != cur_part_data_.ArrayIterEnd())
+    {
+        return true;
+    }
+    else
+    {
+        while(cur_position_ != positions_.end())
+        {
+            std::string data_str;
+            data_str.resize(cur_position_->get_length());
+            if(::pread(fd_, const_cast<char*>(data_str.data()), cur_position_->get_length(), cur_position_->get_index()) < 0)
+            {
+                Logger_error("read data part filed:%s", tools::Logger::OsError(errno));
+                return false;
+            }
+            cur_part_data_ = tools::CommandConvert::JsonStrToJson(data_str);
+            if(cur_part_data_ == Value::NullValue)
+            {
+                Logger_error("read sstable data failed!");
+                return false;
+            }
+
+            cur_position_++;
+
+            cur_position_iter_ = cur_part_data_.ArrayIterBegin();
+            if(cur_position_iter_ != cur_part_data_.ArrayIterEnd())
+            {
+                return true;
+            }
+            else
+            {
+                // 没有数据下一个part data
+                continue;
+            }
+        }
+    }
+
+    return false;
+}
+//---------------------------------------------------------------------------
+std::shared_ptr<Command> SsTable::Next()
+{
+    // 迭代器有效，直接返回
+    if(cur_position_iter_ != cur_part_data_.ArrayIterEnd())
+    {
+        Value value = *cur_position_iter_;
+        ++cur_position_iter_;
+        return tools::CommandConvert::JsonToCommand(value);
     }
 
     return nullptr;

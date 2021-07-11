@@ -16,9 +16,13 @@ class RmCommand : public Command
 {
 public:
     RmCommand(const std::string& key)
-    :   Command(CommandType::RM, key)
+    :   RmCommand(key, base::Timestamp::Now())
     {
+    }
 
+    RmCommand(const std::string& key, base::Timestamp timestamp)
+    :   Command(CommandType::RM, key, timestamp)
+    {
     }
 };
 

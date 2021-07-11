@@ -23,11 +23,7 @@ base::json::Value CommandConvert::CommandToJson(const std::shared_ptr<Command>& 
     Value value(Value::Object);
     value["type"] = static_cast<unsigned>(command->get_type());
     value["key"] = command->get_key();
-    #ifdef _DEBUG
-        value["timestamp"] = command->get_timestamp().Datetime(true);
-    #else
-        value["timestamp"] = command->get_timestamp().Microseconds();
-    #endif
+    value["timestamp"] = command->get_timestamp().Microseconds();
     // set
     if(command->get_type() == CommandType::SET)
     {
@@ -64,13 +60,14 @@ base::json::Value CommandConvert::JsonStrToJson(const std::string& command_str)
 //---------------------------------------------------------------------------
 std::shared_ptr<Command> CommandConvert::JsonToCommand(const base::json::Value& value)
 {
+    base::Timestamp timestamp(value["timestamp"].AsUInt64());
     if(value["type"].AsUInt() == static_cast<unsigned>(CommandType::SET))
     {
-        return std::make_shared<SetCommand>(value["key"].AsString(), value["value"].AsString());
+        return std::make_shared<SetCommand>(value["key"].AsString(), value["value"].AsString(), timestamp);
     }
     else
     {
-        return std::make_shared<RmCommand>(value["key"].AsString());
+        return std::make_shared<RmCommand>(value["key"].AsString(), timestamp);
     }
 }
 //---------------------------------------------------------------------------

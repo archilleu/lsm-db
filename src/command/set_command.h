@@ -16,7 +16,12 @@ class SetCommand : public Command
 {
 public:
     SetCommand(const std::string& key, const std::string& value)
-    :   Command(CommandType::SET, key)
+    :   SetCommand(key, value, base::Timestamp::Now())
+    {
+    }
+
+    SetCommand(const std::string& key, const std::string& value, base::Timestamp timestamp)
+    :   Command(CommandType::SET, key, timestamp)
     {
         value_ = value;
     }
