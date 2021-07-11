@@ -255,6 +255,10 @@ bool KvStore::SetOrRm(std::shared_ptr<Command> command)
             Logger_warn("sstable maintainning");
             return true;
         }
+        else
+        {
+            is_maintain_ = true;
+        }
 
 
         // 5.交换内存索引
